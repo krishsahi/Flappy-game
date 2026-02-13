@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Fappy Bird</title>
+    <style>
+        body { margin:0; padding:0; background:#000; overflow:hidden; touch-action:manipulation; font-family:Arial,sans-serif; }
+        #gameContainer { position:relative; width:100vw; height:100vh; display:flex; justify-content:center; align-items:center; }
+        canvas { width:100%; height:100%; max-width:400px; max-height:667px; background:#70C5CF; display:block; }
+        @media (max-width:600px) { canvas { max-width:none; width:100%; height:100%; } }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        let WIDTH = 288;
+        let HEIGHT = 512;
+        function resize() {
+            const ratio = WIDTH / HEIGHT;
+            let w = window.innerWidth;
+            let h = window.innerHeight;
+            if (w / h > ratio) { canvas.height = h; canvas.width = h * ratio; }
+            else { canvas.width = w; canvas.height = w / ratio; }
+            WIDTH = canvas.width; HEIGHT = canvas.height;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        const PIPE_WIDTH = 52;
+        const PIPE_CAP_HEIGHT = 30;
+        const GROUND_HEIGHT = 112;
+        const GAP = 150;
+        const BIRD_RADIUS = 12;
+        const GRAVITY = 0.4;
+        const FLAP_VELOCITY = -8.5;
+
+        let gameState = 'menu';
+        let bird = { x: WIDTH * 0.25, y: HEIGHT / 3, vy: 0 };
+        let pipes = [];
+        let score = 0;
+        let groundx1 = 0;
+        let groundx2 = WIDTH * 1.17;
+
+        // === CHANGE THESE SOUND LINKS TO YOUR OWN MP3/OGG ===
+        // Free examples — replace with your files (upload to free host like catbox.moe or use base64)
+        const sounds = {
+            flap: new Audio('https://assets.codepen.io/243235/wing-flap.mp3'),
+            die:  new Audio('https://assets.codepen.io/243235/hit.mp3'),
+            win:  new Audio('https://assets.codepen.io/243235/victory.mp3')
+        };
+        Object.values(sounds).forEach(s => { s.preload = 'auto'; s.load(); });
+
+        function playSound(id) {
+            const snd = sounds[id];
+            if (snd) { snd.currentTime = 0; snd.play().catch(() => {}); }
+        }
+
+        function flap() {
+            playSound('flap');
+            if (gameState === 'playing') bird.vy = FLAP_VELOCITY;
+            else if (gameState === 'menu' || gameState === 'dead' || gameState === 'win') startGame();
+        }
+
+        canvas.addEventListener('click', flap);
+        canvas.addEventListener('touchstart', e => { e.preventDefault(); flap(); });
+        document.addEventListener('keydown', e => {
+            if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); flap(); }
+        });
+
+        function startGame() {
+            bird = { x: WIDTH * 0.25, y: HEIGHT / 3, vy: 0 };
+            pipes = [];
+            score = 0;
+            groundx1 = 0;
+            groundx2 = WIDTH * 1.17;
+            gameState = 'playing';
+        }
+
+        function update() {
+            if (gameState !== 'playing') return;
+
+            bird.vy += GRAVITY;
+            bird.y += bird.vy;
+
+            groundx1 -= 2; groundx2 -= 2;
+            if (groundx1 <= -WIDTH * 1.17) groundx1 = WIDTH * 1.17;
+            if (groundx2 <= -WIDTH * 1.17) groundx2 = 0;
+
+            if (pipes.length === 0 || pipes[pipes.length-1].x < WIDTH - 220) {
+                const topH = 60 + Math.random() * 220;
+                pipes.push({ x: WIDTH + 50, topH, scored: false });
+            }
+
+            pipes.forEach((p, i) => {
+                p.x -= 2;
+                if (p.x < -PIPE_WIDTH) pipes.splice(i, 1);
+
+                if (!p.scored && p.x + PIPE_WIDTH < bird.x) { p.scored = true; score++; }
+
+                const botY = p.topH + GAP;
+                if (bird.x + BIRD_RADIUS > p.x && bird.x - BIRD_RADIUS < p.x + PIPE_WIDTH) {
+                    if (bird.y - BIRD_RADIUS < p.topH || bird.y + BIRD_RADIUS > botY) {
+                        gameState = 'dead'; playSound('die');
+                    }
+                }
+            });
+
+            if (bird.y + BIRD_RADIUS > HEIGHT - GROUND_HEIGHT || bird.y - BIRD_RADIUS < 0) {
+                gameState = 'dead'; playSound('die');
+            }
+
+            if (score >= 20) { gameState = 'win'; playSound('win'); }
+        }
+
+        function drawPipe(x, topH) {
+            const botY = topH + GAP;
+            ctx.fillStyle = '#569F5F';
+            ctx.fillRect(x, 0, PIPE_WIDTH, topH);
+            ctx.fillRect(x, botY, PIPE_WIDTH, HEIGHT - GROUND_HEIGHT - botY);
+            ctx.fillStyle = '#4DA256';
+            ctx.fillRect(x - 4, topH - PIPE_CAP_HEIGHT, PIPE_WIDTH + 8, PIPE_CAP_HEIGHT);
+            ctx.fillRect(x - 4, botY, PIPE_WIDTH + 8, PIPE_CAP_HEIGHT);
+        }
+
+        function drawBird() {
+            const rot = Math.min(Math.max(bird.vy * 0.08, -1.2), 0.6);
+            ctx.save();
+            ctx.translate(bird.x, bird.y);
+            ctx.rotate(rot);
+            ctx.fillStyle = '#FFCC00';
+            ctx.beginPath(); ctx.arc(0, 0, BIRD_RADIUS, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = 'white'; ctx.beginPath(); ctx.arc(4, -4, 5, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = 'black'; ctx.beginPath(); ctx.arc(6, -4, 2.5, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#FF8800';
+            ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(16, -4); ctx.lineTo(16, 4); ctx.fill();
+            ctx.restore();
+        }
+
+        function draw() {
+            const grad = ctx.createLinearGradient(0, 0, 0, HEIGHT - GROUND_HEIGHT);
+            grad.addColorStop(0, '#71C5CF'); grad.addColorStop(1, '#A0E0E8');
+            ctx.fillStyle = grad; ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            pipes.forEach(p => drawPipe(p.x, p.topH));
+
+            ctx.fillStyle = '#DED895';
+            ctx.fillRect(groundx1, HEIGHT - GROUND_HEIGHT, WIDTH*1.17, GROUND_HEIGHT);
+            ctx.fillRect(groundx2, HEIGHT - GROUND_HEIGHT, WIDTH*1.17, GROUND_HEIGHT);
+
+            drawBird();
+
+            ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 4;
+            ctx.font = 'bold 60px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.strokeText(score, WIDTH/2, 100); ctx.fillText(score, WIDTH/2, 100);
+
+            if (gameState !== 'playing') {
+                ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0, 0, WIDTH, HEIGHT);
+                ctx.fillStyle = 'white'; ctx.font = 'bold 50px Arial';
+                ctx.fillText(gameState === 'win' ? 'YOU WIN!' : 'GAME OVER', WIDTH/2, HEIGHT/2 - 50);
+                ctx.font = 'bold 40px Arial'; ctx.fillText(`Score: ${score}`, WIDTH/2, HEIGHT/2 + 20);
+                ctx.font = '30px Arial'; ctx.fillText('Tap to ' + (gameState === 'menu' ? 'Start' : 'Retry'), WIDTH/2, HEIGHT/2 + 90);
+            }
+
+            if (gameState === 'menu') {
+                ctx.font = 'bold 55px Arial'; ctx.fillText('FAPPY BIRD', WIDTH/2, HEIGHT/2 - 120);
+            }
+        }
+
+        function loop() { update(); draw(); requestAnimationFrame(loop); }
+        loop();
+    </script>
+</body>
+</html>
