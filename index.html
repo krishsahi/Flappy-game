@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Fappy Bird</title>
+    <title>Flappy Krish</title>
     <style>
         body { margin:0; padding:0; background:#000; overflow:hidden; touch-action:manipulation; font-family:Arial,sans-serif; }
         #gameContainer { position:relative; width:100vw; height:100vh; display:flex; justify-content:center; align-items:center; }
@@ -33,13 +33,16 @@
         window.addEventListener('resize', resize);
         resize();
 
+        // Game constants (tuned for smooth feel - slower base + frame-independent)
         const PIPE_WIDTH = 52;
         const PIPE_CAP_HEIGHT = 30;
         const GROUND_HEIGHT = 112;
         const GAP = 150;
         const BIRD_RADIUS = 12;
-        const GRAVITY = 0.4;
-        const FLAP_VELOCITY = -8.5;
+        const GRAVITY = 0.35;      // Slightly reduced for easier control
+        const FLAP_VELOCITY = -7.5; // Gentler flap
+        const SCROLL_SPEED = 1.8;   // Slower pipes/ground
+        const TARGET_FPS = 60;     // Normalize to 60fps equivalent
 
         let gameState = 'menu';
         let bird = { x: WIDTH * 0.25, y: HEIGHT / 3, vy: 0 };
@@ -47,9 +50,9 @@
         let score = 0;
         let groundx1 = 0;
         let groundx2 = WIDTH * 1.17;
+        let lastTime = 0;
 
-        // === CHANGE THESE SOUND LINKS TO YOUR OWN MP3/OGG ===
-        // Free examples — replace with your files (upload to free host like catbox.moe or use base64)
+        // === SOUNDS (same as before - swap if needed) ===
         const sounds = {
             flap: new Audio('https://assets.codepen.io/243235/wing-flap.mp3'),
             die:  new Audio('https://assets.codepen.io/243235/hit.mp3'),
@@ -81,25 +84,33 @@
             groundx1 = 0;
             groundx2 = WIDTH * 1.17;
             gameState = 'playing';
+            lastTime = performance.now();
         }
 
-        function update() {
+        function update(delta) {
             if (gameState !== 'playing') return;
 
-            bird.vy += GRAVITY;
-            bird.y += bird.vy;
+            // Frame-independent physics (FIXES "too fast" on any device!)
+            const dt = delta * TARGET_FPS / 1000; // Normalize delta to 60fps steps
 
-            groundx1 -= 2; groundx2 -= 2;
+            // Bird
+            bird.vy += GRAVITY * dt;
+            bird.y += bird.vy * dt;
+
+            // Ground scroll
+            groundx1 -= SCROLL_SPEED * dt;
+            groundx2 -= SCROLL_SPEED * dt;
             if (groundx1 <= -WIDTH * 1.17) groundx1 = WIDTH * 1.17;
             if (groundx2 <= -WIDTH * 1.17) groundx2 = 0;
 
+            // Pipes
             if (pipes.length === 0 || pipes[pipes.length-1].x < WIDTH - 220) {
                 const topH = 60 + Math.random() * 220;
                 pipes.push({ x: WIDTH + 50, topH, scored: false });
             }
 
             pipes.forEach((p, i) => {
-                p.x -= 2;
+                p.x -= SCROLL_SPEED * dt;
                 if (p.x < -PIPE_WIDTH) pipes.splice(i, 1);
 
                 if (!p.scored && p.x + PIPE_WIDTH < bird.x) { p.scored = true; score++; }
@@ -141,6 +152,50 @@
             ctx.fillStyle = '#FF8800';
             ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(16, -4); ctx.lineTo(16, 4); ctx.fill();
             ctx.restore();
+        }
+
+        function draw() {
+            const grad = ctx.createLinearGradient(0, 0, 0, HEIGHT - GROUND_HEIGHT);
+            grad.addColorStop(0, '#71C5CF'); grad.addColorStop(1, '#A0E0E8');
+            ctx.fillStyle = grad; ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            pipes.forEach(p => drawPipe(p.x, p.topH));
+
+            ctx.fillStyle = '#DED895';
+            ctx.fillRect(groundx1, HEIGHT - GROUND_HEIGHT, WIDTH*1.17, GROUND_HEIGHT);
+            ctx.fillRect(groundx2, HEIGHT - GROUND_HEIGHT, WIDTH*1.17, GROUND_HEIGHT);
+
+            drawBird();
+
+            ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#000000'; ctx.lineWidth = 4;
+            ctx.font = 'bold 60px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.strokeText(score, WIDTH/2, 100); ctx.fillText(score, WIDTH/2, 100);
+
+            if (gameState !== 'playing') {
+                ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0, 0, WIDTH, HEIGHT);
+                ctx.fillStyle = 'white'; ctx.font = 'bold 50px Arial';
+                ctx.fillText(gameState === 'win' ? 'YOU WIN!' : 'GAME OVER', WIDTH/2, HEIGHT/2 - 50);
+                ctx.font = 'bold 40px Arial'; ctx.fillText(`Score: ${score}`, WIDTH/2, HEIGHT/2 + 20);
+                ctx.font = '30px Arial'; ctx.fillText('Tap to ' + (gameState === 'menu' ? 'Start' : 'Retry'), WIDTH/2, HEIGHT/2 + 90);
+            }
+
+            if (gameState === 'menu') {
+                ctx.font = 'bold 55px Arial'; ctx.fillText('FLAPPY KRISH', WIDTH/2, HEIGHT/2 - 120);
+            }
+        }
+
+        function loop(now) {
+            const delta = now - lastTime;
+            lastTime = now;
+            update(delta);
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        requestAnimationFrame(loop);
+    </script>
+</body>
+</html>            ctx.restore();
         }
 
         function draw() {
