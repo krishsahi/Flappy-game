@@ -8,11 +8,11 @@
     body { margin:0; padding:0; background:#000; overflow:hidden; touch-action:manipulation; font-family:Arial,sans-serif; }
     #gameContainer { position:relative; width:100vw; height:100vh; display:flex; justify-content:center; align-items:center; }
     canvas { width:100%; height:100%; max-width:420px; max-height:740px; background:#70C5CF; display:block; }
-    #hud {
-      position: fixed; left: 12px; top: 12px; right: 12px;
-      color: #fff; font: 14px/1.3 Arial, sans-serif;
-      background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 12px;
-      pointer-events: none; white-space: pre-line;
+    #hud{
+      position:fixed; left:12px; top:12px; right:12px;
+      color:#fff; font:14px/1.35 Arial,sans-serif;
+      background:rgba(0,0,0,0.35); padding:10px 12px; border-radius:12px;
+      pointer-events:none; white-space:pre-line;
     }
   </style>
 </head>
@@ -20,7 +20,7 @@
   <div id="gameContainer">
     <canvas id="canvas"></canvas>
   </div>
-  <div id="hud">Loading assets…</div>
+  <div id="hud">Loading…</div>
 
   <script>
     const canvas = document.getElementById("canvas");
@@ -53,17 +53,29 @@
     // ====== GAME TUNING
     const GROUND_HEIGHT = 112;
     const GAP = 160;
-    const PIPE_W = 70;          // real-books pipe width
+    const PIPE_W = 70;
+
     const GRAVITY = 0.38;
     const FLAP_VEL = -7.7;
     const SPEED = 2.0;
     const TARGET_FPS = 60;
+
     const WIN_SCORE = 20;
 
-    const BIRD_BODY_R = 18;     // collision radius
-    const FACE_SIZE = 38;       // face overlay size
+    const BIRD_BODY_R = 18;  // collision radius
+    const FACE_SIZE = 38;    // face overlay size
 
-    // ====== SAFE ASSET LOADING
+    // ====== ASSET PATHS (must match repo)
+    const PATHS = {
+      face: "face.png",
+      books: "img/books.png",
+      bgm: "sounds/bg.mp3",
+      hit: "sounds/hit.mp3",
+      fall: "sounds/fall.mp3",
+      win: "sounds/win.mp3"
+    };
+
+    // ====== SAFE LOADERS
     function loadImage(src) {
       return new Promise((resolve) => {
         const img = new Image();
@@ -93,63 +105,54 @@
       };
     }
 
-    // ====== ASSETS (paths MUST match repo exactly)
-    const PATHS = {
-      face: "face.png",
-      books: "img/books.png",
-      bgm: "sounds/bg.mp3",
-      hit: "sounds/hit.mp3",
-      fall: "sounds/fall.mp3",
-      win: "sounds/win.mp3"
-    };
-
-    let faceImg = null;
-    let booksImg = null;
-    let booksPattern = null;
-
-    // Audio
+    // ====== AUDIO
     const bgm = new Audio(PATHS.bgm);
     bgm.loop = true;
     bgm.preload = "auto";
     bgm.volume = 0.35;
+
+    // Strong mobile-safe start
+    let musicStarted = false;
+    function startBGM() {
+      if (musicStarted) return;
+      musicStarted = true;
+
+      // muted play trick
+      bgm.muted = true;
+      const p = bgm.play();
+      if (p) p.catch(() => { musicStarted = false; });
+
+      setTimeout(() => {
+        bgm.muted = false;
+        bgm.volume = 0.35;
+      }, 120);
+    }
 
     const sfx = {
       hit:  makeSoundPool(PATHS.hit, 4, 1.0),
       fall: makeSoundPool(PATHS.fall, 4, 1.0),
       win:  makeSoundPool(PATHS.win, 2, 1.0),
     };
+    function playSfx(name) { if (sfx[name]) sfx[name].play(); }
 
-    function playSfx(name) {
-      if (sfx[name]) sfx[name].play();
-    }
+    // Start music on first gesture anywhere
+    document.addEventListener("pointerdown", startBGM, { once:true });
+    document.addEventListener("touchstart", startBGM, { once:true });
+    document.addEventListener("keydown", startBGM, { once:true });
 
-    // unlock audio on first user gesture (required on mobile)
-    let audioUnlocked = false;
-    async function unlockAudio() {
-      if (audioUnlocked) return;
-      audioUnlocked = true;
+    // Debug if bgm fails
+    bgm.addEventListener("error", () => {
+      hud.style.display = "block";
+      hud.textContent =
+        "BGM load failed ❌\n" +
+        "Check file path EXACT:\n" + PATHS.bgm + "\n\n" +
+        "GitHub is case-sensitive.";
+    });
 
-      // unlock sfx voices
-      const all = Object.values(sfx).flatMap(s => s.pool);
-      for (const a of all) {
-        try {
-          a.muted = true;
-          await a.play().catch(() => {});
-          a.pause();
-          a.currentTime = 0;
-          a.muted = false;
-        } catch {}
-      }
-
-      // start bgm
-      try {
-        bgm.currentTime = 0;
-        await bgm.play().catch(() => {});
-      } catch {}
-    }
-
-    document.addEventListener("pointerdown", () => unlockAudio(), { once: true });
-    document.addEventListener("keydown", () => unlockAudio(), { once: true });
+    // ====== IMAGES / PATTERN
+    let faceImg = null;
+    let booksImg = null;
+    let booksPattern = null;
 
     // ====== GAME STATE
     let gameState = "menu"; // menu | playing | dead | win
@@ -157,19 +160,14 @@
     let lastTime = performance.now();
 
     let score = 0, best = 0;
-    let bird = { x: 0, y: 0, vy: 0 };
-    let pipes = [];
-
-    let groundx1 = 0;
-    let groundx2 = 0;
+    let bird = { x:0, y:0, vy:0 };
+    let pipes = []; // {x, topH, scored, texYTop, texYBot}
 
     function resetGame() {
       bird = { x: WIDTH * 0.27, y: HEIGHT / 2.7, vy: 0 };
       pipes = [];
       score = 0;
       deathReason = "";
-      groundx1 = 0;
-      groundx2 = WIDTH * 1.17;
     }
 
     function startGame() {
@@ -180,18 +178,17 @@
 
     // ====== INPUT
     function flap() {
-      unlockAudio();
-      if (gameState === "playing") bird.vy = FLAP_VEL; // no flap sound (as you wanted)
+      startBGM(); // backup start
+      if (gameState === "playing") bird.vy = FLAP_VEL;
       else startGame();
     }
-
     canvas.addEventListener("click", flap);
     canvas.addEventListener("touchstart", (e) => { e.preventDefault(); flap(); }, { passive:false });
     document.addEventListener("keydown", (e) => {
       if (e.code === "Space" || e.code === "ArrowUp") { e.preventDefault(); flap(); }
     });
 
-    // ====== DRAW HELPERS
+    // ====== HELPERS
     function drawCircleImage(img, cx, cy, size, border = true) {
       const r = size / 2;
       ctx.save();
@@ -219,39 +216,52 @@
       return (dx*dx + dy*dy) <= r*r;
     }
 
-    // ====== REAL BOOK PIPES (image pattern fill)
-    function drawBookPipe(x, topH) {
+    // ====== BOOK PIPES (FIXED TEXTURE PER PIPE)
+    // The key fix: each pipe stores texYTop/texYBot so the pattern never "slides"
+    function spawnPipe() {
+      const topH = 70 + Math.random() * 200;
+
+      // lock texture offsets ONCE at spawn
+      const randA = Math.floor(Math.random() * 500);
+      const randB = Math.floor(Math.random() * 500);
+
+      pipes.push({
+        x: WIDTH + 60,
+        topH,
+        scored: false,
+        texYTop: randA,
+        texYBot: randB
+      });
+    }
+
+    function drawBookPipe(p) {
+      const x = p.x;
+      const topH = p.topH;
       const botY = topH + GAP;
       const playH = HEIGHT - GROUND_HEIGHT;
 
-      // if books image missing, fallback rectangle (won't crash)
-      if (!booksPattern) {
-        ctx.fillStyle = "rgba(0,0,0,0.20)";
-        ctx.fillRect(x, 0, PIPE_W, topH);
-        ctx.fillRect(x, botY, PIPE_W, playH - botY);
-        return;
-      }
-
-      function fillStack(y, h) {
+      function fillStack(y, h, texY) {
         // shadow
         ctx.fillStyle = "rgba(0,0,0,0.18)";
         ctx.fillRect(x + 6, y + 6, PIPE_W, h);
 
-        // clip stack rect then fill with repeating books texture
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(x, y, PIPE_W, h);
-        ctx.clip();
+        if (!booksPattern) {
+          ctx.fillStyle = "rgba(0,0,0,0.20)";
+          ctx.fillRect(x, y, PIPE_W, h);
+        } else {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x, y, PIPE_W, h);
+          ctx.clip();
 
-        ctx.fillStyle = booksPattern;
+          // IMPORTANT: lock pattern to the pipe (not the world)
+          // We do NOT use x/y for offset — we use texY so it stays fixed.
+          ctx.translate(-0, -texY);
+          ctx.fillStyle = booksPattern;
+          ctx.fillRect(x, y + texY, PIPE_W + 200, h + 200);
 
-        // offset texture so stacks look different
-        const ox = (x * 0.7) % 120;
-        const oy = (y * 0.6) % 120;
-        ctx.translate(-ox, -oy);
-        ctx.fillRect(x + ox, y + oy, PIPE_W + 200, h + 200);
-
-        ctx.restore();
+          ctx.restore();
+        }
 
         // border
         ctx.strokeStyle = "rgba(0,0,0,0.35)";
@@ -267,16 +277,16 @@
         ctx.stroke();
       }
 
-      fillStack(0, topH);
-      fillStack(botY, playH - botY);
+      fillStack(0, topH, p.texYTop);
+      fillStack(botY, playH - botY, p.texYBot);
 
-      // “lip” at gap edges
+      // gap lips
       ctx.fillStyle = "rgba(255,255,255,0.18)";
       ctx.fillRect(x - 8, topH - 12, PIPE_W + 16, 12);
       ctx.fillRect(x - 8, botY, PIPE_W + 16, 12);
     }
 
-    // ====== BIRD LOOKS LIKE BIRD + FACE OVERLAY
+    // ====== BIRD (bird + face overlay)
     function drawBirdWithFace() {
       const rot = Math.min(Math.max(bird.vy * 0.07, -1.1), 0.6);
 
@@ -335,10 +345,7 @@
       bird.y += bird.vy * dt;
 
       // spawn pipes
-      if (pipes.length === 0 || pipes[pipes.length - 1].x < WIDTH - 230) {
-        const topH = 70 + Math.random() * 200;
-        pipes.push({ x: WIDTH + 60, topH, scored:false });
-      }
+      if (pipes.length === 0 || pipes[pipes.length - 1].x < WIDTH - 230) spawnPipe();
 
       // move pipes + collision
       for (let i = pipes.length - 1; i >= 0; i--) {
@@ -409,7 +416,6 @@
     function drawGround() {
       ctx.fillStyle = "#E8D9A9";
       ctx.fillRect(0, HEIGHT - GROUND_HEIGHT, WIDTH, GROUND_HEIGHT);
-
       ctx.fillStyle = "rgba(0,0,0,0.08)";
       for (let x = 0; x < WIDTH; x += 24) ctx.fillRect(x, HEIGHT - 40, 10, 4);
     }
@@ -462,16 +468,13 @@
 
     function draw() {
       drawBackground();
-
-      // pipes
-      for (const p of pipes) drawBookPipe(p.x, p.topH);
-
+      for (const p of pipes) drawBookPipe(p);
       drawGround();
       drawBirdWithFace();
       drawUI();
     }
 
-    // ====== MAIN LOOP (crash-proof)
+    // ====== LOOP (crash-proof)
     function loop(now) {
       try {
         const delta = now - lastTime;
@@ -479,24 +482,22 @@
         update(delta);
         draw();
       } catch (err) {
+        hud.style.display = "block";
         hud.textContent = "Runtime error (game stopped):\n" + (err?.message || err);
         console.error(err);
-        return; // stop loop
+        return;
       }
       requestAnimationFrame(loop);
     }
 
-    // ====== LOAD ASSETS THEN START
+    // ====== INIT LOAD
     (async function init() {
       resetGame();
 
-      const results = await Promise.all([
+      const [faceRes, booksRes] = await Promise.all([
         loadImage(PATHS.face),
-        loadImage(PATHS.books)
+        loadImage(PATHS.books),
       ]);
-
-      const faceRes = results[0];
-      const booksRes = results[1];
 
       const missing = [];
       if (faceRes.ok) faceImg = faceRes.img; else missing.push(faceRes.src);
@@ -505,28 +506,16 @@
         booksPattern = ctx.createPattern(booksImg, "repeat");
       } else missing.push(booksRes.src);
 
-      // audio debug info
-      const audioInfo =
-        `BGM: ${PATHS.bgm}\n` +
-        `Unlocked: ${audioUnlocked ? "yes" : "no"}\n` +
-        `Tip: first tap starts music`;
-
       if (missing.length) {
-        hud.textContent =
-          "Some assets are missing (still playable):\n" +
-          missing.join("\n") + "\n\n" + audioInfo;
-      } else {
-        hud.textContent = "Ready ✅\nTap / Space to start\n\n" + audioInfo;
-        setTimeout(() => { hud.style.display = "none"; }, 2500);
-      }
-
-      // if bgm path is wrong, show it clearly
-      bgm.addEventListener("error", () => {
         hud.style.display = "block";
         hud.textContent =
-          "BGM failed to load ❌\nCheck file path EXACT:\n" +
-          PATHS.bgm + "\n\nGitHub is case-sensitive.";
-      });
+          "Some assets missing (still playable):\n" +
+          missing.join("\n") +
+          "\n\nFix paths exactly.";
+      } else {
+        hud.textContent = "Ready ✅ Tap / Space to start";
+        setTimeout(() => { hud.style.display = "none"; }, 2000);
+      }
 
       requestAnimationFrame(loop);
     })();
