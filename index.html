@@ -46,21 +46,22 @@
     // ====== GAME TUNING
     const GROUND_HEIGHT = 112;
     const GAP = 155;
-    const BOOK_PIPE_WIDTH = 62;         // thicker than normal pipe
-    const FACE_SIZE = 44;               // bird size (your face)
+    const BOOK_PIPE_WIDTH = 62;
+    const FACE_SIZE = 38;          // face overlay size (head)
+    const BIRD_RADIUS = 18;        // collision radius (bird body)
     const GRAVITY = 0.38;
     const FLAP_VELOCITY = -7.7;
     const SCROLL_SPEED = 2.0;
     const TARGET_FPS = 60;
     const WIN_SCORE = 20;
 
-    // ====== FACE IMAGE (bird)
+    // ====== FACE IMAGE
     const faceImg = new Image();
     faceImg.src = "face.png";
     let faceReady = false;
     faceImg.onload = () => (faceReady = true);
 
-    // ====== SOUND POOLS (so hit/fall can overlap)
+    // ====== SOUND POOLS
     function makeSoundPool(src, voices = 3, volume = 1) {
       const pool = [];
       for (let i = 0; i < voices; i++) {
@@ -80,7 +81,7 @@
       };
     }
 
-    // Background music (single audio, loop)
+    // Background music (loop)
     const bgm = new Audio("sounds/bg.mp3");
     bgm.loop = true;
     bgm.preload = "auto";
@@ -96,13 +97,12 @@
       if (sounds[id]) sounds[id].play();
     }
 
-    // Autoplay unlock (needed on mobile)
+    // Autoplay unlock (SFX + BGM)
     let audioUnlocked = false;
     function unlockAudioAndMusic() {
       if (audioUnlocked) return;
       audioUnlocked = true;
 
-      // unlock SFX pools
       const allAudios = Object.values(sounds).flatMap(s => s.all);
       allAudios.forEach(a => {
         try {
@@ -115,12 +115,13 @@
         } catch {}
       });
 
-      // start background music
-      try {
-        bgm.currentTime = 0;
-        bgm.play().catch(() => {});
-      } catch {}
+      try { bgm.currentTime = 0; bgm.play().catch(() => {}); } catch {}
     }
+
+    // Start music on first touch anywhere (more reliable than only canvas)
+    function startMusicOnce() { unlockAudioAndMusic(); }
+    document.addEventListener("pointerdown", startMusicOnce, { once: true });
+    document.addEventListener("keydown", startMusicOnce, { once: true });
 
     // ====== GAME STATE
     let gameState = "menu"; // menu | playing | dead | win
@@ -131,7 +132,7 @@
     let best = 0;
 
     let bird = { x: 0, y: 0, vy: 0 };
-    let pipes = []; // each: { x, topH, scored }
+    let pipes = [];
 
     let groundx1 = 0;
     let groundx2 = 0;
@@ -155,12 +156,11 @@
     function flap() {
       unlockAudioAndMusic();
       if (gameState === "playing") {
-        bird.vy = FLAP_VELOCITY; // NO flap sound (as you wanted)
+        bird.vy = FLAP_VELOCITY; // no flap sound
       } else {
         startGame();
       }
     }
-
     canvas.addEventListener("click", flap);
     canvas.addEventListener("touchstart", (e) => { e.preventDefault(); flap(); }, { passive: false });
     document.addEventListener("keydown", (e) => {
@@ -170,7 +170,7 @@
       }
     });
 
-    // ====== DRAW HELPERS
+    // ====== HELPERS
     function drawCircleImage(img, cx, cy, size, border = true) {
       const r = size / 2;
       ctx.save();
@@ -190,84 +190,6 @@
       }
     }
 
-    // Draw a "book stack" pipe (top + bottom) instead of green pipes
-    function drawBookPipe(x, topH) {
-      const botY = topH + GAP;
-      const playAreaH = HEIGHT - GROUND_HEIGHT;
-
-      // book colors rotate by position for variety
-      const palette = ["#E4572E", "#17BEBB", "#FFC914", "#2E282A", "#76B041", "#3D5A80", "#EE6C4D"];
-      const spineLine = "rgba(255,255,255,0.35)";
-
-      function drawStack(y, h) {
-        // base shadow
-        ctx.fillStyle = "rgba(0,0,0,0.12)";
-        ctx.fillRect(x + 3, y + 3, BOOK_PIPE_WIDTH, h);
-
-        // main stack background
-        ctx.fillStyle = "rgba(255,255,255,0.15)";
-        ctx.fillRect(x, y, BOOK_PIPE_WIDTH, h);
-
-        // draw "books" as horizontal slices
-        const bookH = 18;
-        let yy = y;
-        let i = 0;
-        while (yy < y + h) {
-          const bh = Math.min(bookH, (y + h) - yy);
-          ctx.fillStyle = palette[(Math.floor((x + yy) / 20) + i) % palette.length];
-          ctx.fillRect(x, yy, BOOK_PIPE_WIDTH, bh);
-
-          // spine lines / details
-          ctx.fillStyle = spineLine;
-          ctx.fillRect(x + 8, yy + 4, BOOK_PIPE_WIDTH - 16, 2);
-
-          // small label
-          ctx.fillStyle = "rgba(0,0,0,0.22)";
-          ctx.fillRect(x + 10, yy + bh - 8, 18, 4);
-
-          yy += bh;
-          i++;
-        }
-
-        // outer border
-        ctx.strokeStyle = "rgba(0,0,0,0.25)";
-        ctx.lineWidth = 3;
-        ctx.strokeRect(x, y, BOOK_PIPE_WIDTH, h);
-      }
-
-      // TOP stack from 0 -> topH
-      drawStack(0, topH);
-
-      // BOTTOM stack from botY -> playAreaH
-      drawStack(botY, playAreaH - botY);
-
-      // small "bookmark cap" at the gap edges (looks cool)
-      ctx.fillStyle = "rgba(255,255,255,0.22)";
-      ctx.fillRect(x - 6, topH - 10, BOOK_PIPE_WIDTH + 12, 10);
-      ctx.fillRect(x - 6, botY, BOOK_PIPE_WIDTH + 12, 10);
-    }
-
-    function drawBirdFace() {
-      const rot = Math.min(Math.max(bird.vy * 0.07, -1.1), 0.6);
-
-      ctx.save();
-      ctx.translate(bird.x, bird.y);
-      ctx.rotate(rot);
-
-      if (faceReady) {
-        drawCircleImage(faceImg, 0, 0, FACE_SIZE, true);
-      } else {
-        // fallback if image not loaded yet
-        ctx.fillStyle = "#fff";
-        ctx.beginPath();
-        ctx.arc(0, 0, FACE_SIZE / 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      ctx.restore();
-    }
-
-    // ====== COLLISION (circle vs rectangle)
     function circleRectCollide(cx, cy, r, rx, ry, rw, rh) {
       const closestX = Math.max(rx, Math.min(cx, rx + rw));
       const closestY = Math.max(ry, Math.min(cy, ry + rh));
@@ -276,17 +198,183 @@
       return (dx * dx + dy * dy) <= r * r;
     }
 
+    // ====== 3D BOOK PIPES
+    function drawBookPipe(x, topH) {
+      const botY = topH + GAP;
+      const playAreaH = HEIGHT - GROUND_HEIGHT;
+
+      function draw3DBookStack(y, h) {
+        const w = BOOK_PIPE_WIDTH;
+
+        // shadow
+        ctx.fillStyle = "rgba(0,0,0,0.18)";
+        ctx.fillRect(x + 6, y + 6, w, h);
+
+        // base
+        ctx.fillStyle = "rgba(255,255,255,0.10)";
+        ctx.fillRect(x, y, w, h);
+
+        const palette = [
+          { a:"#FF595E", b:"#C81D25" },
+          { a:"#1982C4", b:"#0B4F6C" },
+          { a:"#8AC926", b:"#4C8C1B" },
+          { a:"#FFCA3A", b:"#C58B00" },
+          { a:"#6A4C93", b:"#3C1F5B" },
+          { a:"#F72585", b:"#8A1450" }
+        ];
+
+        const bookH = 18;
+        let yy = y;
+        let i = 0;
+
+        while (yy < y + h) {
+          const bh = Math.min(bookH, (y + h) - yy);
+          const col = palette[(Math.floor((x + yy) / 25) + i) % palette.length];
+
+          const g = ctx.createLinearGradient(x, yy, x + w, yy);
+          g.addColorStop(0, col.b);
+          g.addColorStop(0.35, col.a);
+          g.addColorStop(1, "#111");
+          ctx.fillStyle = g;
+          ctx.fillRect(x, yy, w, bh);
+
+          // side face
+          ctx.fillStyle = "rgba(255,255,255,0.10)";
+          ctx.fillRect(x + w - 10, yy, 10, bh);
+
+          // bevel
+          ctx.fillStyle = "rgba(255,255,255,0.22)";
+          ctx.fillRect(x + 2, yy + 2, w - 14, 2);
+
+          ctx.fillStyle = "rgba(0,0,0,0.25)";
+          ctx.fillRect(x + 2, yy + bh - 2, w - 12, 2);
+
+          // label
+          ctx.fillStyle = "rgba(255,255,255,0.22)";
+          ctx.fillRect(x + 10, yy + bh * 0.55, 22, 6);
+
+          // title lines
+          ctx.fillStyle = "rgba(255,255,255,0.20)";
+          ctx.fillRect(x + 10, yy + 6, 26, 2);
+          ctx.fillRect(x + 10, yy + 10, 18, 2);
+
+          // separator
+          ctx.fillStyle = "rgba(0,0,0,0.18)";
+          ctx.fillRect(x, yy + bh - 1, w, 1);
+
+          yy += bh;
+          i++;
+        }
+
+        // borders
+        ctx.strokeStyle = "rgba(0,0,0,0.35)";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x, y, w, h);
+
+        ctx.strokeStyle = "rgba(255,255,255,0.18)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x + 2, y + 2);
+        ctx.lineTo(x + 2, y + h - 2);
+        ctx.stroke();
+      }
+
+      draw3DBookStack(0, topH);
+      draw3DBookStack(botY, playAreaH - botY);
+
+      // gap lips
+      ctx.fillStyle = "rgba(255,255,255,0.20)";
+      ctx.fillRect(x - 8, topH - 12, BOOK_PIPE_WIDTH + 16, 12);
+      ctx.fillRect(x - 8, botY, BOOK_PIPE_WIDTH + 16, 12);
+
+      ctx.fillStyle = "rgba(0,0,0,0.18)";
+      ctx.fillRect(x - 8, topH - 2, BOOK_PIPE_WIDTH + 16, 2);
+      ctx.fillRect(x - 8, botY + 10, BOOK_PIPE_WIDTH + 16, 2);
+    }
+
+    // ====== BIRD LOOKS LIKE BIRD + FACE OVERLAY
+    function drawBirdWithFace() {
+      const rot = Math.min(Math.max(bird.vy * 0.07, -1.1), 0.6);
+
+      ctx.save();
+      ctx.translate(bird.x, bird.y);
+      ctx.rotate(rot);
+
+      // shadow
+      ctx.fillStyle = "rgba(0,0,0,0.18)";
+      ctx.beginPath();
+      ctx.ellipse(-2, 6, 18, 11, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // body (bird)
+      const bodyGrad = ctx.createLinearGradient(-20, -10, 22, 14);
+      bodyGrad.addColorStop(0, "#FFD54A");
+      bodyGrad.addColorStop(1, "#F39C12");
+      ctx.fillStyle = bodyGrad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 20, 14, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // wing
+      ctx.fillStyle = "rgba(255,255,255,0.25)";
+      ctx.beginPath();
+      ctx.ellipse(-4, 3, 12, 8, -0.25, 0, Math.PI * 2);
+      ctx.fill();
+
+      // tail
+      ctx.fillStyle = "rgba(0,0,0,0.12)";
+      ctx.beginPath();
+      ctx.moveTo(-20, 0);
+      ctx.lineTo(-30, -6);
+      ctx.lineTo(-28, 2);
+      ctx.closePath();
+      ctx.fill();
+
+      // beak
+      ctx.fillStyle = "#FF7A00";
+      ctx.beginPath();
+      ctx.moveTo(18, 0);
+      ctx.lineTo(30, -5);
+      ctx.lineTo(30, 5);
+      ctx.closePath();
+      ctx.fill();
+
+      // eye (small, still bird-like)
+      ctx.fillStyle = "white";
+      ctx.beginPath();
+      ctx.arc(8, -4, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "black";
+      ctx.beginPath();
+      ctx.arc(9.5, -4, 2, 0, Math.PI * 2);
+      ctx.fill();
+
+      // FACE overlay (head area) — your face on top of bird
+      if (faceReady) {
+        // place slightly forward like bird head
+        drawCircleImage(faceImg, 6, -1, FACE_SIZE, true);
+      } else {
+        // fallback
+        ctx.fillStyle = "rgba(255,255,255,0.8)";
+        ctx.beginPath();
+        ctx.arc(6, -1, FACE_SIZE/2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
     // ====== UPDATE
     function update(deltaMs) {
       if (gameState !== "playing") return;
 
       const dt = (deltaMs * TARGET_FPS) / 1000;
 
-      // bird
+      // bird physics
       bird.vy += GRAVITY * dt;
       bird.y += bird.vy * dt;
 
-      // ground scroll (visual only)
+      // ground scroll (visual)
       groundx1 -= SCROLL_SPEED * dt;
       groundx2 -= SCROLL_SPEED * dt;
       if (groundx1 <= -WIDTH * 1.17) groundx1 = WIDTH * 1.17;
@@ -298,14 +386,12 @@
         pipes.push({ x: WIDTH + 60, topH, scored: false });
       }
 
-      // move + collision
-      const birdR = FACE_SIZE * 0.42;
-
+      // collisions
       for (let i = pipes.length - 1; i >= 0; i--) {
         const p = pipes[i];
         p.x -= SCROLL_SPEED * dt;
 
-        if (p.x < -BOOK_PIPE_WIDTH - 50) {
+        if (p.x < -BOOK_PIPE_WIDTH - 60) {
           pipes.splice(i, 1);
           continue;
         }
@@ -319,16 +405,9 @@
         const botY = p.topH + GAP;
         const playAreaH = HEIGHT - GROUND_HEIGHT;
 
-        // collide with TOP book stack
-        if (circleRectCollide(bird.x, bird.y, birdR, p.x, 0, BOOK_PIPE_WIDTH, p.topH)) {
-          gameState = "dead";
-          deathReason = "hit";
-          playSound("hit");
-          return;
-        }
-
-        // collide with BOTTOM book stack
-        if (circleRectCollide(bird.x, bird.y, birdR, p.x, botY, BOOK_PIPE_WIDTH, playAreaH - botY)) {
+        // collide with top/bottom stacks (circle vs rect)
+        if (circleRectCollide(bird.x, bird.y, BIRD_RADIUS, p.x, 0, BOOK_PIPE_WIDTH, p.topH) ||
+            circleRectCollide(bird.x, bird.y, BIRD_RADIUS, p.x, botY, BOOK_PIPE_WIDTH, playAreaH - botY)) {
           gameState = "dead";
           deathReason = "hit";
           playSound("hit");
@@ -336,8 +415,8 @@
         }
       }
 
-      // fall/top out
-      if (bird.y + birdR > HEIGHT - GROUND_HEIGHT || bird.y - birdR < 0) {
+      // fall / top out
+      if (bird.y + BIRD_RADIUS > HEIGHT - GROUND_HEIGHT || bird.y - BIRD_RADIUS < 0) {
         gameState = "dead";
         deathReason = "fall";
         playSound("fall");
@@ -353,14 +432,13 @@
 
     // ====== DRAW
     function drawBackground() {
-      // sky gradient
       const grad = ctx.createLinearGradient(0, 0, 0, HEIGHT - GROUND_HEIGHT);
       grad.addColorStop(0, "#71C5CF");
       grad.addColorStop(1, "#C6F2F7");
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-      // subtle clouds
+      // soft clouds
       ctx.fillStyle = "rgba(255,255,255,0.25)";
       for (let i = 0; i < 6; i++) {
         const cx = (i * 70 + (Date.now() / 50) % 70) % (WIDTH + 80) - 40;
@@ -374,19 +452,15 @@
     }
 
     function drawGround() {
-      // ground strip
       ctx.fillStyle = "#E8D9A9";
       ctx.fillRect(groundx1, HEIGHT - GROUND_HEIGHT, WIDTH * 1.17, GROUND_HEIGHT);
       ctx.fillRect(groundx2, HEIGHT - GROUND_HEIGHT, WIDTH * 1.17, GROUND_HEIGHT);
 
-      // little lines like tiles
       ctx.fillStyle = "rgba(0,0,0,0.08)";
-      for (let x = 0; x < WIDTH; x += 24) {
-        ctx.fillRect(x, HEIGHT - 40, 10, 4);
-      }
+      for (let x = 0; x < WIDTH; x += 24) ctx.fillRect(x, HEIGHT - 40, 10, 4);
     }
 
-    function drawUIOverlay() {
+    function drawUI() {
       // score
       ctx.fillStyle = "#ffffff";
       ctx.strokeStyle = "#000000";
@@ -399,7 +473,6 @@
 
       if (gameState === "playing") return;
 
-      // overlay box
       ctx.fillStyle = "rgba(0,0,0,0.65)";
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -410,27 +483,21 @@
       if (gameState === "menu") {
         ctx.font = "bold 44px Arial";
         ctx.fillText("BOOK FLAPPY", WIDTH / 2, HEIGHT / 2 - 120);
-
         ctx.font = "bold 28px Arial";
         ctx.fillText("KRISH EDITION", WIDTH / 2, HEIGHT / 2 - 78);
-
         ctx.font = "24px Arial";
         ctx.fillText("Tap / Space to Start", WIDTH / 2, HEIGHT / 2 + 10);
-
         ctx.font = "22px Arial";
-        ctx.fillText("Background music will start after your first tap", WIDTH / 2, HEIGHT / 2 + 50);
+        ctx.fillText("Music starts after first tap", WIDTH / 2, HEIGHT / 2 + 50);
       }
 
       if (gameState === "dead") {
         ctx.font = "bold 46px Arial";
         ctx.fillText("GAME OVER", WIDTH / 2, HEIGHT / 2 - 70);
-
         ctx.font = "bold 30px Arial";
         ctx.fillText(`Score: ${score}  |  Best: ${best}`, WIDTH / 2, HEIGHT / 2 - 20);
-
         ctx.font = "24px Arial";
         ctx.fillText(deathReason === "hit" ? "You hit the books!" : "You fell!", WIDTH / 2, HEIGHT / 2 + 18);
-
         ctx.font = "26px Arial";
         ctx.fillText("Tap to Retry", WIDTH / 2, HEIGHT / 2 + 70);
       }
@@ -438,10 +505,8 @@
       if (gameState === "win") {
         ctx.font = "bold 50px Arial";
         ctx.fillText("YOU WIN!", WIDTH / 2, HEIGHT / 2 - 70);
-
         ctx.font = "bold 30px Arial";
         ctx.fillText(`Score: ${score}  |  Best: ${best}`, WIDTH / 2, HEIGHT / 2 - 20);
-
         ctx.font = "26px Arial";
         ctx.fillText("Tap to Play Again", WIDTH / 2, HEIGHT / 2 + 70);
       }
@@ -450,15 +515,13 @@
     function draw() {
       drawBackground();
 
-      // pipes (books)
       pipes.forEach(p => drawBookPipe(p.x, p.topH));
 
       drawGround();
 
-      // bird (face)
-      drawBirdFace();
+      drawBirdWithFace();
 
-      drawUIOverlay();
+      drawUI();
     }
 
     // ====== LOOP
@@ -472,7 +535,6 @@
       draw();
       requestAnimationFrame(loop);
     }
-
     requestAnimationFrame(loop);
   </script>
 </body>
