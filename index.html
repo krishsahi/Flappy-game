@@ -111,13 +111,12 @@
     bgm.preload = "auto";
     bgm.volume = 0.35;
 
-    // Strong mobile-safe start
+    // Mobile-safe start
     let musicStarted = false;
     function startBGM() {
       if (musicStarted) return;
       musicStarted = true;
 
-      // muted play trick
       bgm.muted = true;
       const p = bgm.play();
       if (p) p.catch(() => { musicStarted = false; });
@@ -126,6 +125,14 @@
         bgm.muted = false;
         bgm.volume = 0.35;
       }, 120);
+    }
+
+    function stopBGM(reset = true) {
+      try { bgm.pause(); } catch {}
+      if (reset) {
+        try { bgm.currentTime = 0; } catch {}
+      }
+      musicStarted = false; // allow restart next round
     }
 
     const sfx = {
@@ -174,13 +181,16 @@
       resetGame();
       gameState = "playing";
       lastTime = performance.now();
+      startBGM(); // start bg when game starts
     }
 
     // ====== INPUT
     function flap() {
-      startBGM(); // backup start
-      if (gameState === "playing") bird.vy = FLAP_VEL;
-      else startGame();
+      if (gameState === "playing") {
+        bird.vy = FLAP_VEL;
+      } else {
+        startGame();
+      }
     }
     canvas.addEventListener("click", flap);
     canvas.addEventListener("touchstart", (e) => { e.preventDefault(); flap(); }, { passive:false });
@@ -216,21 +226,15 @@
       return (dx*dx + dy*dy) <= r*r;
     }
 
-    // ====== BOOK PIPES (FIXED TEXTURE PER PIPE)
-    // The key fix: each pipe stores texYTop/texYBot so the pattern never "slides"
+    // ====== BOOK PIPES (pattern anchored to PIPE: NO sliding)
     function spawnPipe() {
       const topH = 70 + Math.random() * 200;
-
-      // lock texture offsets ONCE at spawn
-      const randA = Math.floor(Math.random() * 500);
-      const randB = Math.floor(Math.random() * 500);
-
       pipes.push({
         x: WIDTH + 60,
         topH,
         scored: false,
-        texYTop: randA,
-        texYBot: randB
+        texYTop: Math.floor(Math.random() * 600),
+        texYBot: Math.floor(Math.random() * 600)
       });
     }
 
@@ -254,11 +258,12 @@
           ctx.rect(x, y, PIPE_W, h);
           ctx.clip();
 
-          // IMPORTANT: lock pattern to the pipe (not the world)
-          // We do NOT use x/y for offset — we use texY so it stays fixed.
-          ctx.translate(-0, -texY);
+          // ✅ anchor pattern to PIPE rect
+          ctx.translate(x, y);
+          ctx.translate(0, -texY);
+
           ctx.fillStyle = booksPattern;
-          ctx.fillRect(x, y + texY, PIPE_W + 200, h + 200);
+          ctx.fillRect(0, texY, PIPE_W + 200, h + 200);
 
           ctx.restore();
         }
@@ -334,6 +339,18 @@
       ctx.restore();
     }
 
+    // ====== STATE CHANGES (stop music)
+    function die(reason) {
+      gameState = "dead";
+      deathReason = reason;
+      stopBGM(true); // ✅ stop bgm on death
+    }
+
+    function win() {
+      gameState = "win";
+      stopBGM(true); // ✅ stop bgm on win
+    }
+
     // ====== UPDATE
     function update(deltaMs) {
       if (gameState !== "playing") return;
@@ -370,25 +387,23 @@
           circleRectCollide(bird.x, bird.y, BIRD_BODY_R, p.x, 0, PIPE_W, p.topH) ||
           circleRectCollide(bird.x, bird.y, BIRD_BODY_R, p.x, botY, PIPE_W, playH - botY)
         ) {
-          gameState = "dead";
-          deathReason = "hit";
           playSfx("hit");
+          die("hit");
           return;
         }
       }
 
       // fall/top out
       if (bird.y + BIRD_BODY_R > HEIGHT - GROUND_HEIGHT || bird.y - BIRD_BODY_R < 0) {
-        gameState = "dead";
-        deathReason = "fall";
         playSfx("fall");
+        die("fall");
         return;
       }
 
       // win
       if (score >= WIN_SCORE) {
-        gameState = "win";
         playSfx("win");
+        win();
       }
     }
 
@@ -446,7 +461,7 @@
         ctx.font = "24px Arial";
         ctx.fillText("Tap / Space to Start", WIDTH/2, HEIGHT/2 + 10);
         ctx.font = "20px Arial";
-        ctx.fillText("Music starts after first tap", WIDTH/2, HEIGHT/2 + 48);
+        ctx.fillText("Music plays only while playing", WIDTH/2, HEIGHT/2 + 48);
       } else if (gameState === "dead") {
         ctx.font = "bold 46px Arial";
         ctx.fillText("GAME OVER", WIDTH/2, HEIGHT/2 - 70);
@@ -509,7 +524,7 @@
       if (missing.length) {
         hud.style.display = "block";
         hud.textContent =
-          "Some assets missing (still playable):\n" +
+          "Missing assets (still playable):\n" +
           missing.join("\n") +
           "\n\nFix paths exactly.";
       } else {
