@@ -3,22 +3,29 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Flappy Krish - Book Run</title>
+  <title>Flappy Krish - Real Books</title>
   <style>
     body { margin:0; padding:0; background:#000; overflow:hidden; touch-action:manipulation; font-family:Arial,sans-serif; }
     #gameContainer { position:relative; width:100vw; height:100vh; display:flex; justify-content:center; align-items:center; }
     canvas { width:100%; height:100%; max-width:420px; max-height:740px; background:#70C5CF; display:block; }
-    @media (max-width:600px) { canvas { max-width:none; width:100%; height:100%; } }
+    #hud {
+      position: fixed; left: 12px; top: 12px; right: 12px;
+      color: #fff; font: 14px/1.3 Arial, sans-serif;
+      background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 12px;
+      pointer-events: none; white-space: pre-line;
+    }
   </style>
 </head>
 <body>
   <div id="gameContainer">
     <canvas id="canvas"></canvas>
   </div>
+  <div id="hud">Loading assets…</div>
 
   <script>
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
+    const hud = document.getElementById("hud");
 
     // ====== RESIZE (fixed ratio)
     const BASE_W = 288;
@@ -45,23 +52,27 @@
 
     // ====== GAME TUNING
     const GROUND_HEIGHT = 112;
-    const GAP = 155;
-    const BOOK_PIPE_WIDTH = 62;
-    const FACE_SIZE = 38;          // face overlay size (head)
-    const BIRD_RADIUS = 18;        // collision radius (bird body)
+    const GAP = 160;
+    const PIPE_W = 70;          // real-books pipe width
     const GRAVITY = 0.38;
-    const FLAP_VELOCITY = -7.7;
-    const SCROLL_SPEED = 2.0;
+    const FLAP_VEL = -7.7;
+    const SPEED = 2.0;
     const TARGET_FPS = 60;
     const WIN_SCORE = 20;
 
-    // ====== FACE IMAGE
-    const faceImg = new Image();
-    faceImg.src = "face.png";
-    let faceReady = false;
-    faceImg.onload = () => (faceReady = true);
+    const BIRD_BODY_R = 18;     // collision radius
+    const FACE_SIZE = 38;       // face overlay size
 
-    // ====== SOUND POOLS
+    // ====== SAFE ASSET LOADING
+    function loadImage(src) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve({ ok:true, img, src });
+        img.onerror = () => resolve({ ok:false, img:null, src });
+        img.src = src;
+      });
+    }
+
     function makeSoundPool(src, voices = 3, volume = 1) {
       const pool = [];
       for (let i = 0; i < voices; i++) {
@@ -70,67 +81,82 @@
         a.volume = volume;
         pool.push(a);
       }
-      let index = 0;
+      let idx = 0;
       return {
+        src,
+        pool,
         play() {
-          const a = pool[index];
-          index = (index + 1) % pool.length;
+          const a = pool[idx];
+          idx = (idx + 1) % pool.length;
           try { a.currentTime = 0; a.play().catch(() => {}); } catch {}
-        },
-        all: pool
+        }
       };
     }
 
-    // Background music (loop)
-    const bgm = new Audio("sounds/bg.mp3");
+    // ====== ASSETS (paths MUST match repo exactly)
+    const PATHS = {
+      face: "face.png",
+      books: "img/books.png",
+      bgm: "sounds/bg.mp3",
+      hit: "sounds/hit.mp3",
+      fall: "sounds/fall.mp3",
+      win: "sounds/win.mp3"
+    };
+
+    let faceImg = null;
+    let booksImg = null;
+    let booksPattern = null;
+
+    // Audio
+    const bgm = new Audio(PATHS.bgm);
     bgm.loop = true;
     bgm.preload = "auto";
     bgm.volume = 0.35;
 
-    const sounds = {
-      hit:  makeSoundPool("sounds/hit.mp3", 4, 1.0),
-      fall: makeSoundPool("sounds/fall.mp3", 4, 1.0),
-      win:  makeSoundPool("sounds/win.mp3", 2, 1.0)
+    const sfx = {
+      hit:  makeSoundPool(PATHS.hit, 4, 1.0),
+      fall: makeSoundPool(PATHS.fall, 4, 1.0),
+      win:  makeSoundPool(PATHS.win, 2, 1.0),
     };
 
-    function playSound(id) {
-      if (sounds[id]) sounds[id].play();
+    function playSfx(name) {
+      if (sfx[name]) sfx[name].play();
     }
 
-    // Autoplay unlock (SFX + BGM)
+    // unlock audio on first user gesture (required on mobile)
     let audioUnlocked = false;
-    function unlockAudioAndMusic() {
+    async function unlockAudio() {
       if (audioUnlocked) return;
       audioUnlocked = true;
 
-      const allAudios = Object.values(sounds).flatMap(s => s.all);
-      allAudios.forEach(a => {
+      // unlock sfx voices
+      const all = Object.values(sfx).flatMap(s => s.pool);
+      for (const a of all) {
         try {
           a.muted = true;
-          a.play().then(() => {
-            a.pause();
-            a.currentTime = 0;
-            a.muted = false;
-          }).catch(() => { a.muted = false; });
+          await a.play().catch(() => {});
+          a.pause();
+          a.currentTime = 0;
+          a.muted = false;
         } catch {}
-      });
+      }
 
-      try { bgm.currentTime = 0; bgm.play().catch(() => {}); } catch {}
+      // start bgm
+      try {
+        bgm.currentTime = 0;
+        await bgm.play().catch(() => {});
+      } catch {}
     }
 
-    // Start music on first touch anywhere (more reliable than only canvas)
-    function startMusicOnce() { unlockAudioAndMusic(); }
-    document.addEventListener("pointerdown", startMusicOnce, { once: true });
-    document.addEventListener("keydown", startMusicOnce, { once: true });
+    document.addEventListener("pointerdown", () => unlockAudio(), { once: true });
+    document.addEventListener("keydown", () => unlockAudio(), { once: true });
 
     // ====== GAME STATE
     let gameState = "menu"; // menu | playing | dead | win
-    let deathReason = "";   // "hit" | "fall"
+    let deathReason = "";   // hit | fall
     let lastTime = performance.now();
 
-    let score = 0;
-    let best = 0;
-
+    let score = 0, best = 0;
     let bird = { x: 0, y: 0, vy: 0 };
     let pipes = [];
 
@@ -154,23 +180,18 @@
 
     // ====== INPUT
     function flap() {
-      unlockAudioAndMusic();
-      if (gameState === "playing") {
-        bird.vy = FLAP_VELOCITY; // no flap sound
-      } else {
-        startGame();
-      }
+      unlockAudio();
+      if (gameState === "playing") bird.vy = FLAP_VEL; // no flap sound (as you wanted)
+      else startGame();
     }
+
     canvas.addEventListener("click", flap);
-    canvas.addEventListener("touchstart", (e) => { e.preventDefault(); flap(); }, { passive: false });
+    canvas.addEventListener("touchstart", (e) => { e.preventDefault(); flap(); }, { passive:false });
     document.addEventListener("keydown", (e) => {
-      if (e.code === "Space" || e.code === "ArrowUp") {
-        e.preventDefault();
-        flap();
-      }
+      if (e.code === "Space" || e.code === "ArrowUp") { e.preventDefault(); flap(); }
     });
 
-    // ====== HELPERS
+    // ====== DRAW HELPERS
     function drawCircleImage(img, cx, cy, size, border = true) {
       const r = size / 2;
       ctx.save();
@@ -195,83 +216,50 @@
       const closestY = Math.max(ry, Math.min(cy, ry + rh));
       const dx = cx - closestX;
       const dy = cy - closestY;
-      return (dx * dx + dy * dy) <= r * r;
+      return (dx*dx + dy*dy) <= r*r;
     }
 
-    // ====== 3D BOOK PIPES
+    // ====== REAL BOOK PIPES (image pattern fill)
     function drawBookPipe(x, topH) {
       const botY = topH + GAP;
-      const playAreaH = HEIGHT - GROUND_HEIGHT;
+      const playH = HEIGHT - GROUND_HEIGHT;
 
-      function draw3DBookStack(y, h) {
-        const w = BOOK_PIPE_WIDTH;
+      // if books image missing, fallback rectangle (won't crash)
+      if (!booksPattern) {
+        ctx.fillStyle = "rgba(0,0,0,0.20)";
+        ctx.fillRect(x, 0, PIPE_W, topH);
+        ctx.fillRect(x, botY, PIPE_W, playH - botY);
+        return;
+      }
 
+      function fillStack(y, h) {
         // shadow
         ctx.fillStyle = "rgba(0,0,0,0.18)";
-        ctx.fillRect(x + 6, y + 6, w, h);
+        ctx.fillRect(x + 6, y + 6, PIPE_W, h);
 
-        // base
-        ctx.fillStyle = "rgba(255,255,255,0.10)";
-        ctx.fillRect(x, y, w, h);
+        // clip stack rect then fill with repeating books texture
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x, y, PIPE_W, h);
+        ctx.clip();
 
-        const palette = [
-          { a:"#FF595E", b:"#C81D25" },
-          { a:"#1982C4", b:"#0B4F6C" },
-          { a:"#8AC926", b:"#4C8C1B" },
-          { a:"#FFCA3A", b:"#C58B00" },
-          { a:"#6A4C93", b:"#3C1F5B" },
-          { a:"#F72585", b:"#8A1450" }
-        ];
+        ctx.fillStyle = booksPattern;
 
-        const bookH = 18;
-        let yy = y;
-        let i = 0;
+        // offset texture so stacks look different
+        const ox = (x * 0.7) % 120;
+        const oy = (y * 0.6) % 120;
+        ctx.translate(-ox, -oy);
+        ctx.fillRect(x + ox, y + oy, PIPE_W + 200, h + 200);
 
-        while (yy < y + h) {
-          const bh = Math.min(bookH, (y + h) - yy);
-          const col = palette[(Math.floor((x + yy) / 25) + i) % palette.length];
+        ctx.restore();
 
-          const g = ctx.createLinearGradient(x, yy, x + w, yy);
-          g.addColorStop(0, col.b);
-          g.addColorStop(0.35, col.a);
-          g.addColorStop(1, "#111");
-          ctx.fillStyle = g;
-          ctx.fillRect(x, yy, w, bh);
-
-          // side face
-          ctx.fillStyle = "rgba(255,255,255,0.10)";
-          ctx.fillRect(x + w - 10, yy, 10, bh);
-
-          // bevel
-          ctx.fillStyle = "rgba(255,255,255,0.22)";
-          ctx.fillRect(x + 2, yy + 2, w - 14, 2);
-
-          ctx.fillStyle = "rgba(0,0,0,0.25)";
-          ctx.fillRect(x + 2, yy + bh - 2, w - 12, 2);
-
-          // label
-          ctx.fillStyle = "rgba(255,255,255,0.22)";
-          ctx.fillRect(x + 10, yy + bh * 0.55, 22, 6);
-
-          // title lines
-          ctx.fillStyle = "rgba(255,255,255,0.20)";
-          ctx.fillRect(x + 10, yy + 6, 26, 2);
-          ctx.fillRect(x + 10, yy + 10, 18, 2);
-
-          // separator
-          ctx.fillStyle = "rgba(0,0,0,0.18)";
-          ctx.fillRect(x, yy + bh - 1, w, 1);
-
-          yy += bh;
-          i++;
-        }
-
-        // borders
+        // border
         ctx.strokeStyle = "rgba(0,0,0,0.35)";
         ctx.lineWidth = 3;
-        ctx.strokeRect(x, y, w, h);
+        ctx.strokeRect(x, y, PIPE_W, h);
 
-        ctx.strokeStyle = "rgba(255,255,255,0.18)";
+        // highlight edge
+        ctx.strokeStyle = "rgba(255,255,255,0.15)";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(x + 2, y + 2);
@@ -279,17 +267,13 @@
         ctx.stroke();
       }
 
-      draw3DBookStack(0, topH);
-      draw3DBookStack(botY, playAreaH - botY);
+      fillStack(0, topH);
+      fillStack(botY, playH - botY);
 
-      // gap lips
-      ctx.fillStyle = "rgba(255,255,255,0.20)";
-      ctx.fillRect(x - 8, topH - 12, BOOK_PIPE_WIDTH + 16, 12);
-      ctx.fillRect(x - 8, botY, BOOK_PIPE_WIDTH + 16, 12);
-
-      ctx.fillStyle = "rgba(0,0,0,0.18)";
-      ctx.fillRect(x - 8, topH - 2, BOOK_PIPE_WIDTH + 16, 2);
-      ctx.fillRect(x - 8, botY + 10, BOOK_PIPE_WIDTH + 16, 2);
+      // “lip” at gap edges
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.fillRect(x - 8, topH - 12, PIPE_W + 16, 12);
+      ctx.fillRect(x - 8, botY, PIPE_W + 16, 12);
     }
 
     // ====== BIRD LOOKS LIKE BIRD + FACE OVERLAY
@@ -300,17 +284,11 @@
       ctx.translate(bird.x, bird.y);
       ctx.rotate(rot);
 
-      // shadow
-      ctx.fillStyle = "rgba(0,0,0,0.18)";
-      ctx.beginPath();
-      ctx.ellipse(-2, 6, 18, 11, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // body (bird)
-      const bodyGrad = ctx.createLinearGradient(-20, -10, 22, 14);
-      bodyGrad.addColorStop(0, "#FFD54A");
-      bodyGrad.addColorStop(1, "#F39C12");
-      ctx.fillStyle = bodyGrad;
+      // body
+      const g = ctx.createLinearGradient(-20, -10, 22, 14);
+      g.addColorStop(0, "#FFD54A");
+      g.addColorStop(1, "#F39C12");
+      ctx.fillStyle = g;
       ctx.beginPath();
       ctx.ellipse(0, 0, 20, 14, 0, 0, Math.PI * 2);
       ctx.fill();
@@ -319,15 +297,6 @@
       ctx.fillStyle = "rgba(255,255,255,0.25)";
       ctx.beginPath();
       ctx.ellipse(-4, 3, 12, 8, -0.25, 0, Math.PI * 2);
-      ctx.fill();
-
-      // tail
-      ctx.fillStyle = "rgba(0,0,0,0.12)";
-      ctx.beginPath();
-      ctx.moveTo(-20, 0);
-      ctx.lineTo(-30, -6);
-      ctx.lineTo(-28, 2);
-      ctx.closePath();
       ctx.fill();
 
       // beak
@@ -339,7 +308,7 @@
       ctx.closePath();
       ctx.fill();
 
-      // eye (small, still bird-like)
+      // eye
       ctx.fillStyle = "white";
       ctx.beginPath();
       ctx.arc(8, -4, 4.2, 0, Math.PI * 2);
@@ -349,17 +318,8 @@
       ctx.arc(9.5, -4, 2, 0, Math.PI * 2);
       ctx.fill();
 
-      // FACE overlay (head area) — your face on top of bird
-      if (faceReady) {
-        // place slightly forward like bird head
-        drawCircleImage(faceImg, 6, -1, FACE_SIZE, true);
-      } else {
-        // fallback
-        ctx.fillStyle = "rgba(255,255,255,0.8)";
-        ctx.beginPath();
-        ctx.arc(6, -1, FACE_SIZE/2, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      // face overlay
+      if (faceImg) drawCircleImage(faceImg, 6, -1, FACE_SIZE, true);
 
       ctx.restore();
     }
@@ -370,63 +330,58 @@
 
       const dt = (deltaMs * TARGET_FPS) / 1000;
 
-      // bird physics
+      // bird
       bird.vy += GRAVITY * dt;
       bird.y += bird.vy * dt;
 
-      // ground scroll (visual)
-      groundx1 -= SCROLL_SPEED * dt;
-      groundx2 -= SCROLL_SPEED * dt;
-      if (groundx1 <= -WIDTH * 1.17) groundx1 = WIDTH * 1.17;
-      if (groundx2 <= -WIDTH * 1.17) groundx2 = 0;
-
       // spawn pipes
-      if (pipes.length === 0 || pipes[pipes.length - 1].x < WIDTH - 220) {
+      if (pipes.length === 0 || pipes[pipes.length - 1].x < WIDTH - 230) {
         const topH = 70 + Math.random() * 200;
-        pipes.push({ x: WIDTH + 60, topH, scored: false });
+        pipes.push({ x: WIDTH + 60, topH, scored:false });
       }
 
-      // collisions
+      // move pipes + collision
       for (let i = pipes.length - 1; i >= 0; i--) {
         const p = pipes[i];
-        p.x -= SCROLL_SPEED * dt;
+        p.x -= SPEED * dt;
 
-        if (p.x < -BOOK_PIPE_WIDTH - 60) {
+        if (p.x < -PIPE_W - 80) {
           pipes.splice(i, 1);
           continue;
         }
 
-        if (!p.scored && p.x + BOOK_PIPE_WIDTH < bird.x) {
+        if (!p.scored && p.x + PIPE_W < bird.x) {
           p.scored = true;
           score++;
           if (score > best) best = score;
         }
 
         const botY = p.topH + GAP;
-        const playAreaH = HEIGHT - GROUND_HEIGHT;
+        const playH = HEIGHT - GROUND_HEIGHT;
 
-        // collide with top/bottom stacks (circle vs rect)
-        if (circleRectCollide(bird.x, bird.y, BIRD_RADIUS, p.x, 0, BOOK_PIPE_WIDTH, p.topH) ||
-            circleRectCollide(bird.x, bird.y, BIRD_RADIUS, p.x, botY, BOOK_PIPE_WIDTH, playAreaH - botY)) {
+        if (
+          circleRectCollide(bird.x, bird.y, BIRD_BODY_R, p.x, 0, PIPE_W, p.topH) ||
+          circleRectCollide(bird.x, bird.y, BIRD_BODY_R, p.x, botY, PIPE_W, playH - botY)
+        ) {
           gameState = "dead";
           deathReason = "hit";
-          playSound("hit");
+          playSfx("hit");
           return;
         }
       }
 
-      // fall / top out
-      if (bird.y + BIRD_RADIUS > HEIGHT - GROUND_HEIGHT || bird.y - BIRD_RADIUS < 0) {
+      // fall/top out
+      if (bird.y + BIRD_BODY_R > HEIGHT - GROUND_HEIGHT || bird.y - BIRD_BODY_R < 0) {
         gameState = "dead";
         deathReason = "fall";
-        playSound("fall");
+        playSfx("fall");
         return;
       }
 
       // win
       if (score >= WIN_SCORE) {
         gameState = "win";
-        playSound("win");
+        playSfx("win");
       }
     }
 
@@ -438,7 +393,7 @@
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-      // soft clouds
+      // clouds
       ctx.fillStyle = "rgba(255,255,255,0.25)";
       for (let i = 0; i < 6; i++) {
         const cx = (i * 70 + (Date.now() / 50) % 70) % (WIDTH + 80) - 40;
@@ -453,8 +408,7 @@
 
     function drawGround() {
       ctx.fillStyle = "#E8D9A9";
-      ctx.fillRect(groundx1, HEIGHT - GROUND_HEIGHT, WIDTH * 1.17, GROUND_HEIGHT);
-      ctx.fillRect(groundx2, HEIGHT - GROUND_HEIGHT, WIDTH * 1.17, GROUND_HEIGHT);
+      ctx.fillRect(0, HEIGHT - GROUND_HEIGHT, WIDTH, GROUND_HEIGHT);
 
       ctx.fillStyle = "rgba(0,0,0,0.08)";
       for (let x = 0; x < WIDTH; x += 24) ctx.fillRect(x, HEIGHT - 40, 10, 4);
@@ -482,60 +436,100 @@
 
       if (gameState === "menu") {
         ctx.font = "bold 44px Arial";
-        ctx.fillText("BOOK FLAPPY", WIDTH / 2, HEIGHT / 2 - 120);
-        ctx.font = "bold 28px Arial";
-        ctx.fillText("KRISH EDITION", WIDTH / 2, HEIGHT / 2 - 78);
+        ctx.fillText("BOOK FLAPPY", WIDTH/2, HEIGHT/2 - 120);
         ctx.font = "24px Arial";
-        ctx.fillText("Tap / Space to Start", WIDTH / 2, HEIGHT / 2 + 10);
-        ctx.font = "22px Arial";
-        ctx.fillText("Music starts after first tap", WIDTH / 2, HEIGHT / 2 + 50);
-      }
-
-      if (gameState === "dead") {
+        ctx.fillText("Tap / Space to Start", WIDTH/2, HEIGHT/2 + 10);
+        ctx.font = "20px Arial";
+        ctx.fillText("Music starts after first tap", WIDTH/2, HEIGHT/2 + 48);
+      } else if (gameState === "dead") {
         ctx.font = "bold 46px Arial";
-        ctx.fillText("GAME OVER", WIDTH / 2, HEIGHT / 2 - 70);
+        ctx.fillText("GAME OVER", WIDTH/2, HEIGHT/2 - 70);
         ctx.font = "bold 30px Arial";
-        ctx.fillText(`Score: ${score}  |  Best: ${best}`, WIDTH / 2, HEIGHT / 2 - 20);
+        ctx.fillText(`Score: ${score} | Best: ${best}`, WIDTH/2, HEIGHT/2 - 20);
         ctx.font = "24px Arial";
-        ctx.fillText(deathReason === "hit" ? "You hit the books!" : "You fell!", WIDTH / 2, HEIGHT / 2 + 18);
+        ctx.fillText(deathReason === "hit" ? "You hit the books!" : "You fell!", WIDTH/2, HEIGHT/2 + 18);
         ctx.font = "26px Arial";
-        ctx.fillText("Tap to Retry", WIDTH / 2, HEIGHT / 2 + 70);
-      }
-
-      if (gameState === "win") {
+        ctx.fillText("Tap to Retry", WIDTH/2, HEIGHT/2 + 70);
+      } else if (gameState === "win") {
         ctx.font = "bold 50px Arial";
-        ctx.fillText("YOU WIN!", WIDTH / 2, HEIGHT / 2 - 70);
+        ctx.fillText("YOU WIN!", WIDTH/2, HEIGHT/2 - 70);
         ctx.font = "bold 30px Arial";
-        ctx.fillText(`Score: ${score}  |  Best: ${best}`, WIDTH / 2, HEIGHT / 2 - 20);
+        ctx.fillText(`Score: ${score} | Best: ${best}`, WIDTH/2, HEIGHT/2 - 20);
         ctx.font = "26px Arial";
-        ctx.fillText("Tap to Play Again", WIDTH / 2, HEIGHT / 2 + 70);
+        ctx.fillText("Tap to Play Again", WIDTH/2, HEIGHT/2 + 70);
       }
     }
 
     function draw() {
       drawBackground();
 
-      pipes.forEach(p => drawBookPipe(p.x, p.topH));
+      // pipes
+      for (const p of pipes) drawBookPipe(p.x, p.topH);
 
       drawGround();
-
       drawBirdWithFace();
-
       drawUI();
     }
 
-    // ====== LOOP
-    resetGame();
-
+    // ====== MAIN LOOP (crash-proof)
     function loop(now) {
-      const delta = now - lastTime;
-      lastTime = now;
-
-      update(delta);
-      draw();
+      try {
+        const delta = now - lastTime;
+        lastTime = now;
+        update(delta);
+        draw();
+      } catch (err) {
+        hud.textContent = "Runtime error (game stopped):\n" + (err?.message || err);
+        console.error(err);
+        return; // stop loop
+      }
       requestAnimationFrame(loop);
     }
-    requestAnimationFrame(loop);
+
+    // ====== LOAD ASSETS THEN START
+    (async function init() {
+      resetGame();
+
+      const results = await Promise.all([
+        loadImage(PATHS.face),
+        loadImage(PATHS.books)
+      ]);
+
+      const faceRes = results[0];
+      const booksRes = results[1];
+
+      const missing = [];
+      if (faceRes.ok) faceImg = faceRes.img; else missing.push(faceRes.src);
+      if (booksRes.ok) {
+        booksImg = booksRes.img;
+        booksPattern = ctx.createPattern(booksImg, "repeat");
+      } else missing.push(booksRes.src);
+
+      // audio debug info
+      const audioInfo =
+        `BGM: ${PATHS.bgm}\n` +
+        `Unlocked: ${audioUnlocked ? "yes" : "no"}\n` +
+        `Tip: first tap starts music`;
+
+      if (missing.length) {
+        hud.textContent =
+          "Some assets are missing (still playable):\n" +
+          missing.join("\n") + "\n\n" + audioInfo;
+      } else {
+        hud.textContent = "Ready ✅\nTap / Space to start\n\n" + audioInfo;
+        setTimeout(() => { hud.style.display = "none"; }, 2500);
+      }
+
+      // if bgm path is wrong, show it clearly
+      bgm.addEventListener("error", () => {
+        hud.style.display = "block";
+        hud.textContent =
+          "BGM failed to load ❌\nCheck file path EXACT:\n" +
+          PATHS.bgm + "\n\nGitHub is case-sensitive.";
+      });
+
+      requestAnimationFrame(loop);
+    })();
   </script>
 </body>
 </html>
