@@ -20,16 +20,16 @@
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
 
-    // ====== BASE RESOLUTION (we scale canvas to screen while keeping ratio)
-    let BASE_W = 288;
-    let BASE_H = 512;
+    // ====== BASE RESOLUTION (keep ratio)
+    const BASE_W = 288;
+    const BASE_H = 512;
     let WIDTH = BASE_W;
     let HEIGHT = BASE_H;
 
     function resize() {
       const ratio = BASE_W / BASE_H;
-      let w = window.innerWidth;
-      let h = window.innerHeight;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
 
       if (w / h > ratio) {
         canvas.height = h;
@@ -38,13 +38,14 @@
         canvas.width = w;
         canvas.height = Math.floor(w / ratio);
       }
+
       WIDTH = canvas.width;
       HEIGHT = canvas.height;
     }
     window.addEventListener("resize", resize);
     resize();
 
-    // ====== GAME CONSTANTS (smooth + slower)
+    // ====== GAME CONSTANTS
     const PIPE_WIDTH = 52;
     const PIPE_CAP_HEIGHT = 30;
     const GROUND_HEIGHT = 112;
@@ -56,53 +57,70 @@
     const SCROLL_SPEED = 1.8;
     const TARGET_FPS = 60;
 
-    // ====== ASSETS: FACE IMAGE
+    // ====== FACE IMAGE
     const faceImg = new Image();
-    faceImg.src = "face.png"; // keep face.png next to index.html
+    faceImg.src = "face.png"; // keep in same folder as index.html
     let faceReady = false;
     faceImg.onload = () => (faceReady = true);
 
-    // ====== ASSETS: SOUNDS (LOCAL FILES)
-    const sounds = {
-      flap: new Audio("sounds/flap.mp3"),
-      hit:  new Audio("sounds/hit.mp3"),   // pipe hit
-      fall: new Audio("sounds/fall.mp3"),  // ground/top out
-      win:  new Audio("sounds/win.mp3")
-    };
-    Object.values(sounds).forEach(a => { a.preload = "auto"; a.load(); });
+    // ====== SOUND POOLS (overlap for fast taps)
+    function makeSoundPool(src, voices = 6, volume = 1) {
+      const pool = [];
+      for (let i = 0; i < voices; i++) {
+        const a = new Audio(src);
+        a.preload = "auto";
+        a.volume = volume;
+        pool.push(a);
+      }
+      let index = 0;
 
-    function playSound(id) {
-      const a = sounds[id];
-      if (!a) return;
-      try {
-        a.currentTime = 0;
-        a.play().catch(() => {});
-      } catch (e) {}
+      return {
+        play() {
+          const a = pool[index];
+          index = (index + 1) % pool.length;
+          try {
+            a.currentTime = 0;
+            a.play().catch(() => {});
+          } catch {}
+        },
+        all: pool
+      };
     }
 
-    // Mobile audio unlock (very important for phones)
+    const sounds = {
+      flap: makeSoundPool("sounds/flap.mp3", 10, 1.0),
+      hit:  makeSoundPool("sounds/hit.mp3", 4, 1.0),
+      fall: makeSoundPool("sounds/fall.mp3", 4, 1.0),
+      win:  makeSoundPool("sounds/win.mp3", 2, 1.0),
+    };
+
+    function playSound(id) {
+      if (sounds[id]) sounds[id].play();
+    }
+
+    // Mobile audio unlock (unlock every voice)
     let audioUnlocked = false;
     function unlockAudio() {
       if (audioUnlocked) return;
       audioUnlocked = true;
 
-      Object.values(sounds).forEach(a => {
+      const allAudios = Object.values(sounds).flatMap(s => s.all);
+      allAudios.forEach(a => {
         try {
           a.muted = true;
           a.play().then(() => {
             a.pause();
             a.currentTime = 0;
             a.muted = false;
-          }).catch(() => {
-            a.muted = false;
-          });
-        } catch (e) {}
+          }).catch(() => { a.muted = false; });
+        } catch {}
       });
     }
 
     // ====== GAME STATE
     let gameState = "menu"; // menu | playing | dead | win
     let deathReason = "";   // "hit" | "fall"
+
     let bird = { x: 0, y: 0, vy: 0 };
     let pipes = [];
     let score = 0;
@@ -110,7 +128,7 @@
     let groundx1 = 0;
     let groundx2 = 0;
 
-    let lastTime = 0;
+    let lastTime = performance.now();
 
     function resetGame() {
       bird = { x: WIDTH * 0.25, y: HEIGHT / 3, vy: 0 };
@@ -135,7 +153,6 @@
         bird.vy = FLAP_VELOCITY;
         playSound("flap");
       } else {
-        // menu/dead/win => restart
         startGame();
       }
     }
@@ -149,47 +166,67 @@
       }
     });
 
+    // ====== HELPERS (circle image)
+    function drawCircleImage(img, cx, cy, size, border = true) {
+      const r = size / 2;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(img, cx - r, cy - r, size, size);
+      ctx.restore();
+
+      if (border) {
+        ctx.strokeStyle = "white";
+        ctx.lineWidth = Math.max(2, size * 0.06);
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
     // ====== UPDATE
     function update(deltaMs) {
       if (gameState !== "playing") return;
 
-      // normalize delta to 60fps steps
+      // Normalize delta to 60fps steps
       const dt = (deltaMs * TARGET_FPS) / 1000;
 
-      // bird physics
+      // Bird physics
       bird.vy += GRAVITY * dt;
       bird.y += bird.vy * dt;
 
-      // ground scroll
+      // Ground scroll
       groundx1 -= SCROLL_SPEED * dt;
       groundx2 -= SCROLL_SPEED * dt;
       if (groundx1 <= -WIDTH * 1.17) groundx1 = WIDTH * 1.17;
       if (groundx2 <= -WIDTH * 1.17) groundx2 = 0;
 
-      // spawn pipes
+      // Spawn pipes
       if (pipes.length === 0 || pipes[pipes.length - 1].x < WIDTH - 220) {
         const topH = 60 + Math.random() * 220;
         pipes.push({ x: WIDTH + 50, topH, scored: false });
       }
 
-      // move pipes + collision
+      // Move pipes + collision
       for (let i = pipes.length - 1; i >= 0; i--) {
         const p = pipes[i];
         p.x -= SCROLL_SPEED * dt;
 
-        // remove offscreen
         if (p.x < -PIPE_WIDTH) {
           pipes.splice(i, 1);
           continue;
         }
 
-        // scoring
+        // Score
         if (!p.scored && p.x + PIPE_WIDTH < bird.x) {
           p.scored = true;
           score++;
         }
 
-        // collision with pipe
+        // Collision with pipe
         const botY = p.topH + GAP;
         const xOverlap = (bird.x + BIRD_RADIUS > p.x) && (bird.x - BIRD_RADIUS < p.x + PIPE_WIDTH);
         if (xOverlap) {
@@ -204,7 +241,7 @@
         }
       }
 
-      // fall / out of bounds
+      // Fall/out of bounds
       if (bird.y + BIRD_RADIUS > HEIGHT - GROUND_HEIGHT || bird.y - BIRD_RADIUS < 0) {
         gameState = "dead";
         deathReason = "fall";
@@ -212,24 +249,41 @@
         return;
       }
 
-      // win condition
+      // Win
       if (score >= 20) {
         gameState = "win";
         playSound("win");
-        return;
       }
     }
 
-    // ====== DRAW HELPERS
+    // ====== DRAW PIPE (with face stickers)
     function drawPipe(x, topH) {
       const botY = topH + GAP;
+
+      // bodies
       ctx.fillStyle = "#569F5F";
       ctx.fillRect(x, 0, PIPE_WIDTH, topH);
       ctx.fillRect(x, botY, PIPE_WIDTH, HEIGHT - GROUND_HEIGHT - botY);
 
+      // caps
       ctx.fillStyle = "#4DA256";
       ctx.fillRect(x - 4, topH - PIPE_CAP_HEIGHT, PIPE_WIDTH + 8, PIPE_CAP_HEIGHT);
       ctx.fillRect(x - 4, botY, PIPE_WIDTH + 8, PIPE_CAP_HEIGHT);
+
+      // Face on pipes
+      if (faceReady) {
+        const s = Math.min(PIPE_WIDTH - 10, 40);
+        const cx = x + PIPE_WIDTH / 2;
+
+        // top pipe face (somewhere inside the top pipe)
+        const yTop = Math.max(24 + s / 2, Math.min(topH * 0.5, topH - s / 2 - 16));
+        drawCircleImage(faceImg, cx, yTop, s, true);
+
+        // bottom pipe face (somewhere inside bottom pipe)
+        const bottomPipeHeight = (HEIGHT - GROUND_HEIGHT - botY);
+        const yBottom = botY + Math.max(s / 2 + 16, Math.min(bottomPipeHeight * 0.5, bottomPipeHeight - s / 2 - 16));
+        drawCircleImage(faceImg, cx, yBottom, s, true);
+      }
     }
 
     function drawBird() {
@@ -239,13 +293,11 @@
       ctx.translate(bird.x, bird.y);
       ctx.rotate(rot);
 
-      // body
       ctx.fillStyle = "#FFCC00";
       ctx.beginPath();
       ctx.arc(0, 0, BIRD_RADIUS, 0, Math.PI * 2);
       ctx.fill();
 
-      // eye
       ctx.fillStyle = "white";
       ctx.beginPath();
       ctx.arc(4, -4, 5, 0, Math.PI * 2);
@@ -256,7 +308,6 @@
       ctx.arc(6, -4, 2.5, 0, Math.PI * 2);
       ctx.fill();
 
-      // beak
       ctx.fillStyle = "#FF8800";
       ctx.beginPath();
       ctx.moveTo(10, 0);
@@ -272,25 +323,8 @@
 
       const size = Math.min(WIDTH * 0.35, 140);
       const cx = WIDTH / 2;
-      const cy = HEIGHT / 2 - 210;
-      const r = size / 2;
-
-      // circle crop
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cx, cy + r, r, 0, Math.PI * 2);
-      ctx.closePath();
-      ctx.clip();
-
-      ctx.drawImage(faceImg, cx - r, cy, size, size);
-      ctx.restore();
-
-      // border
-      ctx.strokeStyle = "white";
-      ctx.lineWidth = 6;
-      ctx.beginPath();
-      ctx.arc(cx, cy + r, r, 0, Math.PI * 2);
-      ctx.stroke();
+      const cy = HEIGHT / 2 - 210 + size / 2;
+      drawCircleImage(faceImg, cx, cy, size, true);
     }
 
     // ====== DRAW
@@ -323,7 +357,7 @@
       ctx.strokeText(score, WIDTH / 2, 100);
       ctx.fillText(score, WIDTH / 2, 100);
 
-      // overlay screens
+      // overlay
       if (gameState !== "playing") {
         ctx.fillStyle = "rgba(0,0,0,0.65)";
         ctx.fillRect(0, 0, WIDTH, HEIGHT);
@@ -339,7 +373,6 @@
         if (gameState === "menu") {
           ctx.font = "bold 55px Arial";
           ctx.fillText("FLAPPY KRISH", WIDTH / 2, HEIGHT / 2 - 120);
-
           ctx.font = "30px Arial";
           ctx.fillText("Tap to Start", WIDTH / 2, HEIGHT / 2 + 10);
         }
@@ -352,11 +385,7 @@
           ctx.fillText(`Score: ${score}`, WIDTH / 2, HEIGHT / 2 + 20);
 
           ctx.font = "28px Arial";
-          ctx.fillText(
-            deathReason === "hit" ? "You hit a pipe!" : "You fell!",
-            WIDTH / 2,
-            HEIGHT / 2 + 65
-          );
+          ctx.fillText(deathReason === "hit" ? "You hit a pipe!" : "You fell!", WIDTH / 2, HEIGHT / 2 + 65);
 
           ctx.font = "30px Arial";
           ctx.fillText("Tap to Retry", WIDTH / 2, HEIGHT / 2 + 110);
@@ -384,12 +413,9 @@
 
       update(delta);
       draw();
-
       requestAnimationFrame(loop);
     }
 
-    // start in menu
-    lastTime = performance.now();
     requestAnimationFrame(loop);
   </script>
 </body>
